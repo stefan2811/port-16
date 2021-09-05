@@ -5,7 +5,9 @@ from fastapi import HTTPException, Request, responses, status
 
 
 async def generic_error_handler(_: Request, e: Exception) -> JSONResponse:
-    """Default Exception error handler
+    """
+    Default Exception error handler
+
     :param _: Request object
     :param e: Exception object
     :return: Error response
@@ -22,7 +24,9 @@ async def generic_error_handler(_: Request, e: Exception) -> JSONResponse:
 
 
 async def http_error_handler(_: Request, e: HTTPException) -> JSONResponse:
-    """Default HTTPException error handler
+    """
+    Default HTTPException error handler
+
     :param _: Request object
     :param e: Exception object
     :return: Error response

@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from port_16.api.status.handlers import status
+from port_16.api.charge_point import handlers as cp_handlers
 from port_16.errors import (
     generic_error_handler,
     http_error_handler,
@@ -19,6 +20,11 @@ def attach_routes(app: FastAPI) -> None:
         prefix='/status',
         tags=['port-16'],
         router=status.router
+    )
+    app.include_router(
+        prefix='/charging-points',
+        tags=['port-16'],
+        router=cp_handlers.router
     )
 
 

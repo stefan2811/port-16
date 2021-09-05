@@ -28,7 +28,7 @@ LOGGING_CONFIG = {
             "class": "logging.StreamHandler",
         },
         "debug": {
-            "level": "DEBUG",
+            "level": "INFO",
             "formatter": "verbose",
             "class": "logging.handlers.RotatingFileHandler",
             "filename": "",
