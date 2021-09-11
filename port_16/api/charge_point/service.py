@@ -2,8 +2,10 @@ import asyncio
 import logging
 
 import websockets
-from ocpp.v16 import call
+from ocpp.routing import on
+from ocpp.v16 import call, call_result
 from ocpp.v16 import ChargePoint as OcppCp
+from ocpp.v16.enums import FirmwareStatus, Action
 
 from port_16.api.charge_point import cp_db
 from port_16.api.charge_point.schemas import (
@@ -49,6 +51,36 @@ class ChargePoint(OcppCp):
                         str(response.current_time)
                     )
                 )
+            elif self.cp_data.state == ChargingPointState.UPDATE_FIRMWARE:
+                request = call.FirmwareStatusNotificationPayload(
+                    status = FirmwareStatus.downloading
+                )
+                await self.call(request)
+                logger.info("CP: {}; Firmware Status Notification: {}.".format(self.cp_data.identity,
+                                                                               FirmwareStatus.downloading))
+                await asyncio.sleep(1)
+                request = call.FirmwareStatusNotificationPayload(
+                    status = FirmwareStatus.downloaded
+                )
+                await self.call(request)
+                logger.info("CP: {}; Firmware Status Notification: {}.".format(self.cp_data.identity,
+                                                                               FirmwareStatus.downloaded))
+                await asyncio.sleep(1)
+                request = call.FirmwareStatusNotificationPayload(
+                    status = FirmwareStatus.installing
+                )
+                await self.call(request)
+                logger.info("CP: {}; Firmware Status Notification: {}.".format(self.cp_data.identity,
+                                                                               FirmwareStatus.installing))
+                await asyncio.sleep(1)
+                request = call.FirmwareStatusNotificationPayload(
+                    status = FirmwareStatus.installed
+                )
+                await self.call(request)
+                logger.info("CP: {}; Firmware Status Notification: {}.".format(self.cp_data.identity,
+                                                                               FirmwareStatus.installed))
+                self.cp_data.state = ChargingPointState.ACCEPTED
+
             else:
                 logger.info(
                     "Charging point {} is in {} state, "
@@ -59,6 +91,12 @@ class ChargePoint(OcppCp):
                 )
 
             await asyncio.sleep(self.cp_data.heartbeat_timeout)
+
+
+    @on(Action.UpdateFirmware)
+    async def on_update_firmware(self, location: str, retrieve_date: str, **kwargs):
+        self.cp_data.state = ChargingPointState.UPDATE_FIRMWARE
+        return call_result.UpdateFirmwarePayload()
 
 
 async def heartbeat(cp: ChargePoint):
