@@ -5,7 +5,7 @@ import websockets
 from ocpp.routing import on
 from ocpp.v16 import call, call_result
 from ocpp.v16 import ChargePoint as OcppCp
-from ocpp.v16.enums import FirmwareStatus, Action
+from ocpp.v16.enums import FirmwareStatus, Action, DiagnosticsStatus
 
 from port_16.api.charge_point import cp_db
 from port_16.api.charge_point.schemas import (
@@ -51,6 +51,7 @@ class ChargePoint(OcppCp):
                         str(response.current_time)
                     )
                 )
+
             elif self.cp_data.state == ChargingPointState.UPDATE_FIRMWARE:
                 request = call.FirmwareStatusNotificationPayload(
                     status = FirmwareStatus.downloading
@@ -81,6 +82,22 @@ class ChargePoint(OcppCp):
                                                                                FirmwareStatus.installed))
                 self.cp_data.state = ChargingPointState.ACCEPTED
 
+            elif self.cp_data.state == ChargingPointState.GET_DIAGNOSTICS:
+                request = call.DiagnosticsStatusNotificationPayload(
+                    status = DiagnosticsStatus.uploading
+                )
+                await self.call(request)
+                logger.info("CP: {}; Diagnostics Status Notification: {}.".format(self.cp_data.identity,
+                                                                                  DiagnosticsStatus.uploading))
+                await asyncio.sleep(1)
+                request = call.DiagnosticsStatusNotificationPayload(
+                    status = DiagnosticsStatus.uploaded
+                )
+                await self.call(request)
+                logger.info("CP: {}; Diagnostics Status Notification: {}.".format(self.cp_data.identity,
+                                                                                  DiagnosticsStatus.uploaded))
+                self.cp_data.state = ChargingPointState.ACCEPTED
+
             else:
                 logger.info(
                     "Charging point {} is in {} state, "
@@ -98,6 +115,12 @@ class ChargePoint(OcppCp):
         self.cp_data.state = ChargingPointState.UPDATE_FIRMWARE
         return call_result.UpdateFirmwarePayload()
 
+    @on(Action.GetDiagnostics)
+    async def on_get_diagnostics(self, location: str, **kwargs):
+        self.cp_data.state = ChargingPointState.GET_DIAGNOSTICS
+        return call_result.GetDiagnosticsPayload(
+            file_name = self.cp_data.identity
+        )
 
 async def heartbeat(cp: ChargePoint):
     logger.info(

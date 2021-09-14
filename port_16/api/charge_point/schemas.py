@@ -11,6 +11,7 @@ class ChargingPointState(Enum):
     ACCEPTED = 'ACCEPTED'
     REJECTED = 'REJECTED'
     UPDATE_FIRMWARE = 'UPDATE_FIRMWARE'
+    GET_DIAGNOSTICS = 'GET_DIAGNOSTICS'
 
 
 class ChargingPointModel(BaseModel):
