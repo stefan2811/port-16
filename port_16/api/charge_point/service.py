@@ -4,10 +4,13 @@ from datetime import datetime
 from typing import Dict, Any
 
 import websockets
-from ocpp.v16 import call
+from ocpp.routing import on
+from ocpp.v16 import call, call_result
 from ocpp.v16 import ChargePoint as OcppCp
-from ocpp.v16.call_result import StartTransactionPayload
-from ocpp.v16.enums import ChargePointStatus, ChargePointErrorCode
+from ocpp.v16.enums import (
+    FirmwareStatus, Action, DiagnosticsStatus,
+    ChargePointStatus, ChargePointErrorCode
+)
 
 from port_16.api.charge_point import cp_db
 from port_16.api.charge_point.schemas import (
@@ -69,6 +72,64 @@ class ChargePoint(OcppCp):
         else:
             self.cp_data.state = ChargingPointState.REJECTED
 
+    async def send_firmware_notification(
+        self, status: FirmwareStatus, sleep_time: int = 1
+    ) -> None:
+        logger.info(
+            'Sending and setting Firmware Status Notification: {} for CP {}. '
+            'It will last for {} seconds'.format(
+                self.cp_data.identity, status, sleep_time
+            )
+        )
+        request = call.FirmwareStatusNotificationPayload(
+            status=status
+        )
+        await self.call(request)
+        if sleep_time > 0:
+            await asyncio.sleep(sleep_time)
+
+    async def send_diagnostics_notification(
+        self, status: DiagnosticsStatus, sleep_time: int = 1
+    ) -> None:
+        logger.info(
+            'Sending and setting Diagnostics Status Notification: {} '
+            'for CP {}. It will last for {} seconds'.format(
+                self.cp_data.identity, status, sleep_time
+            )
+        )
+        request = call.DiagnosticsStatusNotificationPayload(
+            status=status
+        )
+        await self.call(request)
+        if sleep_time > 0:
+            await asyncio.sleep(sleep_time)
+
+    async def _simulate_update_firmware(self) -> None:
+        # Downloading
+        await self.send_firmware_notification(FirmwareStatus.downloading)
+        # Downloaded
+        await self.send_firmware_notification(FirmwareStatus.downloading)
+        # Installing
+        await self.send_firmware_notification(FirmwareStatus.installing)
+        # Installed
+        await self.send_firmware_notification(FirmwareStatus.installed, -1)
+
+        # Charging point available again
+        self.cp_data.state = ChargingPointState.ACCEPTED
+
+    async def _simulate_upload_diagnostics(self) -> None:
+        # Uploading
+        await self.send_diagnostics_notification(
+            DiagnosticsStatus.uploading
+        )
+        # Uploaded
+        await self.send_diagnostics_notification(
+            DiagnosticsStatus.uploaded, -1
+        )
+
+        # Charging point available again
+        self.cp_data.state = ChargingPointState.ACCEPTED
+
     async def heartbeat(self) -> None:
         while True:
             if self.cp_data.state == ChargingPointState.ACCEPTED:
@@ -81,13 +142,14 @@ class ChargePoint(OcppCp):
                         str(response.current_time)
                     )
                 )
+            elif self.cp_data.state == ChargingPointState.UPDATE_FIRMWARE:
+                await self._simulate_update_firmware()
+            elif self.cp_data.state == ChargingPointState.GET_DIAGNOSTICS:
+                await self._simulate_upload_diagnostics()
             else:
                 logger.info(
-                    "Charging point {} is in {} state, "
-                    "heartbeat wont be sent".format(
-                        self.cp_data.identity,
-                        self.cp_data.state
-                    )
+                    "Charging point {} is in {} state, heartbeat wont be "
+                    "sent".format(self.cp_data.identity, self.cp_data.state)
                 )
 
             await asyncio.sleep(self.cp_data.heartbeat_timeout)
@@ -126,7 +188,7 @@ class ChargePoint(OcppCp):
 
     async def send_start_transaction(
         self, transaction: StartTransaction
-    ) -> StartTransactionPayload:
+    ) -> call.StartTransactionPayload:
         request = call.StartTransactionPayload(
             connector_id=transaction.connector_id,
             id_tag=transaction.id_tag,
@@ -150,6 +212,22 @@ class ChargePoint(OcppCp):
         #: :type: :class:`ocpp.v16.call_result.StopTransactionPayload`
         response = await self.call(request)
         return response.id_tag_info
+
+    @on(Action.UpdateFirmware)
+    async def on_update_firmware(
+        self, location: str, retrieve_date: str, **kwargs
+    ) -> call_result.UpdateFirmwarePayload:
+        self.cp_data.state = ChargingPointState.UPDATE_FIRMWARE
+        return call_result.UpdateFirmwarePayload()
+
+    @on(Action.GetDiagnostics)
+    async def on_get_diagnostics(
+        self, location: str, **kwargs
+    ) -> call_result.GetDiagnosticsPayload:
+        self.cp_data.state = ChargingPointState.GET_DIAGNOSTICS
+        return call_result.GetDiagnosticsPayload(
+            file_name=self.cp_data.identity
+        )
 
 
 async def heartbeat(cp: ChargePoint):
