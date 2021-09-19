@@ -3,6 +3,7 @@
 import os
 import logging
 from pathlib import Path
+from typing import Dict, Callable
 
 from inject import Binder
 
@@ -12,16 +13,24 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 APP_NAME = 'port-16'
 
 
-def production(binder: Binder) -> None:
+def production(
+    kwargs: Dict,
+) -> Callable:
     """
     Injector configuration
     """
-    # Bind project path
-    project_dir = Path(__file__).parents[1]
-    binder.bind('project_dir', project_dir)
+    def bind_configuration(binder: Binder):
+        # Bind project path
+        project_dir = Path(__file__).parents[1]
+        binder.bind('project_dir', project_dir)
 
-    # Configure logging
-    configure_logging(APP_NAME, BASE_DIR, True)
+        for key, value in kwargs.items():
+            binder.bind(key, value)
 
-    logger = logging.getLogger(__name__)
-    logger.info(f'Starting app {APP_NAME}..')
+        # Configure logging
+        configure_logging(APP_NAME, BASE_DIR, True)
+
+        logger = logging.getLogger(__name__)
+        logger.info(f'Starting app {APP_NAME}..')
+
+    return bind_configuration

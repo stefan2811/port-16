@@ -23,7 +23,7 @@ def set_cp(cp: Any) -> Any:
     :return: Stored ChargingPoint.
     :rtype: port_16.api.charge_point.service.ChargePoint
     """
-    _all_cps['{}'.format(cp.cp_data.identity)] = cp
+    _all_cps[cp.cp_data.identity] = cp
     return cp
 
 
