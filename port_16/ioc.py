@@ -14,7 +14,8 @@ APP_NAME = 'port-16'
 
 
 def production(
-    kwargs: Dict,
+    instance_kwargs: Dict,
+    provider_kwargs: Dict
 ) -> Callable:
     """
     Injector configuration
@@ -24,8 +25,11 @@ def production(
         project_dir = Path(__file__).parents[1]
         binder.bind('project_dir', project_dir)
 
-        for key, value in kwargs.items():
+        for key, value in instance_kwargs.items():
             binder.bind(key, value)
+
+        for key, value in provider_kwargs.items():
+            binder.bind_to_provider(key, value)
 
         # Configure logging
         configure_logging(APP_NAME, BASE_DIR, True)

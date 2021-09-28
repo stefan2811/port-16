@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Any
 
+import inject
 import websockets
 from ocpp.routing import on
 from ocpp.v16 import call, call_result
@@ -12,9 +13,13 @@ from ocpp.v16.enums import (
     ChargePointStatus, ChargePointErrorCode
 )
 
-from port_16.api.charge_point import cp_db
+from port_16.app_status import AppStatus
+from port_16.api.common import cp_db
 from port_16.api.charge_point.schemas import (
     ChargingPointModel, ChargingPointState,
+
+)
+from port_16.api.commands.schemas import (
     StartTransaction, StopTransaction
 )
 
@@ -153,6 +158,14 @@ class ChargePoint(OcppCp):
                 )
 
             await asyncio.sleep(self.cp_data.heartbeat_timeout)
+            #: :type: :class:`port_16.app_status.ApplicationStatusService`
+            status_service = inject.instance('status_service')
+            if status_service.get_status() == AppStatus.EXITING:
+                logger.info(
+                    'Application is in Shutting down state.. Exiting '
+                    'from heartbeat background process..'
+                )
+                return
 
     async def send_authorize(self, id_tag: str) -> Dict[str, Any]:
         request = call.AuthorizePayload(
@@ -188,7 +201,7 @@ class ChargePoint(OcppCp):
 
     async def send_start_transaction(
         self, transaction: StartTransaction
-    ) -> call.StartTransactionPayload:
+    ) -> call_result.StartTransactionPayload:
         request = call.StartTransactionPayload(
             connector_id=transaction.connector_id,
             id_tag=transaction.id_tag,
