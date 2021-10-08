@@ -2,14 +2,13 @@ import logging
 from typing import Dict, Any
 
 from fastapi import BackgroundTasks
-from fastapi.exceptions import HTTPException
-from ocpp.v16.enums import AuthorizationStatus
+from ocpp.v16.enums import ChargePointStatus
 
-from port_16.api.common import cp_db
-from port_16.api.commands.schemas import (
-    StartTransaction, StopTransaction
+from port_16.api.charge_point import ChargingPointState
+from port_16.api.commands.schemas import StartTransaction, StopTransaction
+from port_16.api.common import (
+    cp_db, heartbeat, ConnectorService, AuthTagService, TransactionService
 )
-from port_16.api.common import heartbeat
 
 logger = logging.getLogger(__name__)
 
@@ -20,19 +19,18 @@ async def execute_boot_notification(cp_id: str) -> Dict[str, Any]:
 
     :param cp_id: Id of CP for which command will be executed.
     """
-    cp = cp_db.get_cp(cp_id)
-    if cp is None:
-        logger.warning(
-            "Could not find charging point data with id: {}."
-            "Boot notification command will be stopped.".format(cp_id)
+    cp = cp_db.validate_and_get(cp_id, command='Boot notification')
+    cp_model = await cp.cp_service.validate_get_entity()
+    cp_model = await cp.send_boot_notification(cp_model.heartbeat)
+    conn_service = ConnectorService(cp_id)
+    if ChargingPointState(cp_model.state) == ChargingPointState.ACCEPTED:
+        connector_data = await conn_service.start_charging_point(
+            cp_model.connector_number
         )
-        raise HTTPException(
-            status_code=404,
-            detail=f'Charging point with id {cp_id} not found in system'
-        )
+        for key, value in connector_data.items():
+            await cp.send_connector_status(key, value)
 
-    await cp.send_boot_notification()
-    return cp.cp_data.dict()
+    return cp_model.dict()
 
 
 async def execute_heartbeat(
@@ -46,19 +44,10 @@ async def execute_heartbeat(
     :param cp_id: Id of CP for which command will be executed.
     :param background_tasks: FastAPI tool for starting background tasks.
     """
-    cp = cp_db.get_cp(cp_id)
-    if cp is None:
-        logger.warning(
-            "Could not find charging point data with id: {}."
-            "Heartbeat command will be stopped.".format(cp_id)
-        )
-        raise HTTPException(
-            status_code=404,
-            detail=f'Charging point with id {cp_id} not found in system'
-        )
-
+    cp = cp_db.validate_and_get(cp_id, command='Heartbeat')
+    cp_model = await cp.cp_service.validate_get_entity()
     background_tasks.add_task(heartbeat, cp)
-    return cp.cp_data.dict()
+    return cp_model.dict()
 
 
 async def execute_authorize(
@@ -72,41 +61,14 @@ async def execute_authorize(
     :param cp_id: Id of CP for which command will be executed.
     :param id_tag: Id of tag which will be authorized
     """
-    #: :type: :class:`port_16.api.common.ChargePoint`
-    cp = cp_db.get_cp(cp_id)
-    if cp is None:
-        logger.warning(
-            "Could not find charging point data with id: {}."
-            "Authorize command will be stopped.".format(cp_id)
-        )
-        raise HTTPException(
-            status_code=404,
-            detail=f'Charging point with id {cp_id} not found in system'
-        )
-
+    cp = cp_db.validate_and_get(cp_id, command='Authorize')
     id_tag_info = await cp.send_authorize(id_tag)
+    service = AuthTagService(identity=id_tag)
     logger.info("Type of expire data: {}".format(
         type(id_tag_info['expiry_date'])
     ))
-    auth_status = id_tag_info['status']
-    # implement auth list and caching later
-    if auth_status == AuthorizationStatus.accepted:
-        cp.set_id_tag_info(id_tag, id_tag_info)
-        return {'id_tag_info': id_tag_info}
-    else:
-        logger.warning(
-            "Authorization failed with id_tag: {} on cp {}."
-            "Reason {}.".format(
-                id_tag, cp_id, str(auth_status)
-            )
-        )
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f'Authorization failed for id_tag {id_tag}, '
-                f'reason: {str(auth_status)}'
-            )
-        )
+    await service.add_tag_info(id_tag_info, command='Authorize')
+    return {'id_tag_info': id_tag_info}
 
 
 async def execute_start_transaction(
@@ -121,58 +83,39 @@ async def execute_start_transaction(
     :param transaction: Transaction data which will be used for starting
         transaction on server side.
     """
-    #: :type: :class:`port_16.api.common.ChargePoint`
-    cp = cp_db.get_cp(cp_id)
-    if cp is None:
-        logger.warning(
-            "Could not find charging point data with id: {}."
-            "Start transaction command will be stopped.".format(cp_id)
-        )
-        raise HTTPException(
-            status_code=404,
-            detail=f'Charging point with id {cp_id} not found in system'
-        )
-
+    cp = cp_db.validate_and_get(cp_id, command='Start transaction')
     # checks tag id in transaction request
-    id_tag = transaction.id_tag
-    tag_info = cp.cp_data.tags.get(id_tag, {})
-    if tag_info.get('status', '') != AuthorizationStatus.accepted:
-        logger.warning(
-            "Id tag {} is not authenticated properly."
-            "Start transaction command will be stopped.".format(id_tag)
-        )
-        raise HTTPException(
-            status_code=403,
-            detail=f'Id tag {id_tag} not valid in system'
-        )
+    auth_tag_service = AuthTagService(transaction.id_tag)
+    await auth_tag_service.validate_tag_id(command='Start transaction')
 
+    # validate if connector is free for charging
+    conn_service = ConnectorService(cp_id)
+    await conn_service.validate_connector_used(transaction.connector_id)
+
+    # send start transaction command to server
     transaction_response = await cp.send_start_transaction(transaction)
-    id_tag_info = transaction_response.id_tag_info
-    auth_status = id_tag_info['status']
-    # implement auth list and caching later
-    if auth_status == AuthorizationStatus.accepted:
-        cp.set_id_tag_info(id_tag, id_tag_info)
-        logger.info('Started transaction {} on cp {}'.format(
-            transaction_response.transaction_id, cp_id
-        ))
-        await cp.set_transaction_connector(
-            transaction_response.transaction_id, transaction.connector_id
-        )
-        return {'id_tag_info': id_tag_info}
-    else:
-        logger.warning(
-            "Start transaction failed with id tag: {} on cp {}."
-            "Reason {}.".format(
-                id_tag, cp_id, str(auth_status)
-            )
-        )
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f'Start transaction for id_tag {id_tag}, '
-                f'reason: {str(auth_status)}'
-            )
-        )
+
+    # update tag info storage with response
+    id_tag_info = await auth_tag_service.add_tag_info(
+        transaction_response.id_tag_info, command='Start transaction'
+    )
+
+    # sets new state for connector on charger
+    await conn_service.update_connector_status(transaction.connector_id)
+    await cp.send_connector_status(
+        transaction.connector_id, ChargePointStatus.charging
+    )
+
+    # updates transaction/connector relation
+    trans_service = TransactionService(cp_id)
+    transaction_id = transaction_response.transaction_id
+    connector_id = transaction.connector_id
+    await trans_service.add_transaction(transaction_id, connector_id)
+
+    logger.info('Started transaction {} within cp {} on connector: {}'.format(
+        transaction_id, cp_id, transaction.connector_id
+    ))
+    return {'id_tag_info': id_tag_info}
 
 
 async def execute_stop_transaction(
@@ -187,69 +130,36 @@ async def execute_stop_transaction(
     :param transaction: Transaction data which will be used for stopping
         transaction on server side.
     """
-    #: :type: :class:`port_16.api.common.ChargePoint`
-    cp = cp_db.get_cp(cp_id)
-    if cp is None:
-        logger.warning(
-            "Could not find charging point data with id: {}."
-            "Start transaction command will be stopped.".format(cp_id)
-        )
-        raise HTTPException(
-            status_code=404,
-            detail=f'Charging point with id {cp_id} not found in system'
-        )
-
+    cp = cp_db.validate_and_get(cp_id, command='Stop transaction')
     # checks tag id in transaction request
-    id_tag = transaction.id_tag
-    if id_tag is not None:
-        tag_info = cp.cp_data.tags.get(id_tag, {})
-        if tag_info.get('status', '') != AuthorizationStatus.accepted:
-            logger.warning(
-                "Id tag {} is not authenticated properly."
-                "Start transaction command will be stopped.".format(id_tag)
-            )
-            raise HTTPException(
-                status_code=403,
-                detail=f'Id tag {id_tag} not valid in system'
-            )
+    auth_tag_service = AuthTagService(transaction.id_tag)
+    await auth_tag_service.validate_tag_id(command='Stop transaction')
 
     #  check if provided transaction exists in system
-    if cp.cp_data.transactions.get(transaction.transaction_id) is None:
-        logger.warning(
-            "Stop transaction failed with id tag: {} on cp {}."
-            "Reason transaction {} not found.".format(
-                id_tag, cp_id, str(transaction.transaction_id)
-            )
-        )
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f'Stop transaction for id_tag {id_tag}, reason transaction: '
-                f'{str(transaction.transaction_id)} not found'
-            )
-        )
+    transaction_id = transaction.transaction_id
+    trans_service = TransactionService(cp_id)
+    await trans_service.validate_transaction_exists(transaction_id)
 
-    transaction_response = await cp.send_stop_transaction(transaction)
-    id_tag_info = transaction_response
-    auth_status = id_tag_info['status']
-    # implement auth list and caching later
-    if auth_status == AuthorizationStatus.accepted:
-        cp.set_id_tag_info(id_tag, id_tag_info)
-        await cp.release_transaction_connector(
-            transaction.transaction_id
-        )
-        return {'id_tag_info': id_tag_info}
-    else:
-        logger.warning(
-            "Stop transaction failed with id tag: {} on cp {}."
-            "Reason {}.".format(
-                id_tag, cp_id, str(auth_status)
-            )
-        )
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f'Stop transaction for id_tag {id_tag}, '
-                f'reason: {str(auth_status)}'
-            )
-        )
+    id_tag_info = await cp.send_stop_transaction(transaction)
+
+    # update tag info storage with response
+    id_tag_info = await auth_tag_service.add_tag_info(
+        id_tag_info, command='Stop transaction'
+    )
+
+    # update connector and transaction/connector relation
+    conn_service = ConnectorService(cp_id)
+    connector_id = await trans_service.remove_transaction(transaction_id)
+
+    # sets new state for connector on charger
+    await conn_service.update_connector_status(
+        connector_id, ChargePointStatus.available
+    )
+    await cp.send_connector_status(
+        connector_id, ChargePointStatus.available
+    )
+
+    logger.info('Stopped transaction {} within cp {} on connector: {}'.format(
+        transaction_id, cp_id, connector_id
+    ))
+    return {'id_tag_info': id_tag_info}

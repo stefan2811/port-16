@@ -10,17 +10,16 @@ from ocpp.v16 import call, call_result
 from ocpp.v16 import ChargePoint as OcppCp
 from ocpp.v16.enums import (
     FirmwareStatus, Action, DiagnosticsStatus,
-    ChargePointStatus, ChargePointErrorCode
+    ChargePointStatus, ChargePointErrorCode, RegistrationStatus
 )
 
-from port_16.app_status import AppStatus
 from port_16.api.common import cp_db
-from port_16.api.charge_point.schemas import (
-    ChargingPointModel, ChargingPointState,
+from port_16.app_status import AppStatus
+from port_16.api.common.service import ChargePointService
+from port_16.api.commands import StartTransaction, StopTransaction
+from port_16.api.charge_point import (
+    ChargingPointModel, ChargingPointState, HeartbeatModel
 
-)
-from port_16.api.commands.schemas import (
-    StartTransaction, StopTransaction
 )
 
 logger = logging.getLogger(__name__)
@@ -28,10 +27,9 @@ logger = logging.getLogger(__name__)
 
 class ChargePoint(OcppCp):
 
-    def __init__(self, cp_data: ChargingPointModel, *args, **kwargs) -> None:
-        kwargs['id'] = cp_data.identity
+    def __init__(self, *args, **kwargs) -> None:
         super(ChargePoint, self).__init__(*args, **kwargs)
-        self.cp_data = cp_data
+        self.cp_service = ChargePointService(self.id)
 
     async def send_connector_status(
         self, connector_id: id,
@@ -44,38 +42,39 @@ class ChargePoint(OcppCp):
             status=status
         )
         await self.call(request)
-        self.cp_data.connectors.update({
-            connector_id: status
-        })
         logger.info(
             'Connector {} of CP {} is in status: {}'.format(
-                connector_id, self.cp_data.identity, status.value
+                connector_id, self.id, status.value
             )
         )
 
-    async def send_boot_notification(self) -> None:
+    async def send_boot_notification(
+        self, heartbeat_model: HeartbeatModel
+    ) -> ChargingPointModel:
         request = call.BootNotificationPayload(
-            charge_point_model=self.cp_data.model,
-            charge_point_vendor=self.cp_data.vendor,
-            charge_box_serial_number=self.cp_data.serial_number
+            charge_point_model=heartbeat_model.model,
+            charge_point_vendor=heartbeat_model.vendor,
+            charge_box_serial_number=heartbeat_model.serial_number
         )
         #: :type: :class:`ocpp.v16.call_result.BootNotificationPayload`
         response = await self.call(request)
 
-        if response.status == 'Accepted':
-            self.cp_data.state = ChargingPointState.ACCEPTED
+        if response.status == RegistrationStatus.accepted:
+            cp_model = await self.cp_service.update_entity(data={
+                'state': ChargingPointState.ACCEPTED.value
+            })
             logger.info(
-                "CP {} connected to central system.".format(
-                    self.cp_data.identity
-                )
+                "CP {} connected to central system.".format(self.id)
             )
-            for i in range(0, self.cp_data.connector_number):
-                await self.send_connector_status(i + 1)
-                self.cp_data.connectors.update({
-                    (i+1): ChargePointStatus.available
-                })
         else:
-            self.cp_data.state = ChargingPointState.REJECTED
+            cp_model = await self.cp_service.update_entity(data={
+                'state': ChargingPointState.REJECTED.value
+            })
+            logger.info(
+                "CP {} rejected by central system.".format(self.id)
+            )
+
+        return cp_model
 
     async def send_firmware_notification(
         self, status: FirmwareStatus, sleep_time: int = 1
@@ -83,7 +82,7 @@ class ChargePoint(OcppCp):
         logger.info(
             'Sending and setting Firmware Status Notification: {} for CP {}. '
             'It will last for {} seconds'.format(
-                self.cp_data.identity, status, sleep_time
+                status, self.id,  sleep_time
             )
         )
         request = call.FirmwareStatusNotificationPayload(
@@ -99,7 +98,7 @@ class ChargePoint(OcppCp):
         logger.info(
             'Sending and setting Diagnostics Status Notification: {} '
             'for CP {}. It will last for {} seconds'.format(
-                self.cp_data.identity, status, sleep_time
+                status, self.id, sleep_time
             )
         )
         request = call.DiagnosticsStatusNotificationPayload(
@@ -120,7 +119,13 @@ class ChargePoint(OcppCp):
         await self.send_firmware_notification(FirmwareStatus.installed, -1)
 
         # Charging point available again
-        self.cp_data.state = ChargingPointState.ACCEPTED
+        await self.cp_service.update_entity(data={
+            'state': ChargingPointState.ACCEPTED.value
+        })
+        logger.info(
+            'After firmware update, CP {} returned '
+            'into ACCEPTED state'.format(self.id)
+        )
 
     async def _simulate_upload_diagnostics(self) -> None:
         # Uploading
@@ -133,31 +138,38 @@ class ChargePoint(OcppCp):
         )
 
         # Charging point available again
-        self.cp_data.state = ChargingPointState.ACCEPTED
+        await self.cp_service.update_entity(data={
+            'state': ChargingPointState.ACCEPTED.value
+        })
+        logger.info(
+            'After firmware update, CP {} returned '
+            'into ACCEPTED state'.format(self.id)
+        )
 
     async def heartbeat(self) -> None:
         while True:
-            if self.cp_data.state == ChargingPointState.ACCEPTED:
+            cp_model = await self.cp_service.validate_get_entity()
+            cp_state = ChargingPointState(cp_model.state)
+            if cp_state == ChargingPointState.ACCEPTED:
                 request = call.HeartbeatPayload()
                 #: :type: :class:`ocpp.v16.call_result.HeartbeatPayload`
                 response = await self.call(request)
                 logger.info(
-                    "Heartbeat: {} - {}".format(
-                        self.cp_data.identity,
-                        str(response.current_time)
+                    "Heartbeat for CP: {} done at {}".format(
+                        self.id, str(response.current_time)
                     )
                 )
-            elif self.cp_data.state == ChargingPointState.UPDATE_FIRMWARE:
+            elif cp_state == ChargingPointState.UPDATE_FIRMWARE:
                 await self._simulate_update_firmware()
-            elif self.cp_data.state == ChargingPointState.GET_DIAGNOSTICS:
+            elif cp_state == ChargingPointState.GET_DIAGNOSTICS:
                 await self._simulate_upload_diagnostics()
             else:
                 logger.info(
                     "Charging point {} is in {} state, heartbeat wont be "
-                    "sent".format(self.cp_data.identity, self.cp_data.state)
+                    "sent".format(self.id, cp_state)
                 )
 
-            await asyncio.sleep(self.cp_data.heartbeat_timeout)
+            await asyncio.sleep(cp_model.heartbeat.timeout)
             #: :type: :class:`port_16.app_status.ApplicationStatusService`
             status_service = inject.instance('status_service')
             if status_service.get_status() == AppStatus.EXITING:
@@ -174,30 +186,6 @@ class ChargePoint(OcppCp):
         #: :type: :class:`ocpp.v16.call_result.AuthorizePayload`
         response = await self.call(request)
         return response.id_tag_info
-
-    def set_id_tag_info(self, id_tag: str, tag_info: dict):
-        self.cp_data.tags.update({
-            id_tag: tag_info
-        })
-
-    async def set_transaction_connector(
-        self, transaction_id: int, connector_id: int
-    ):
-        self.cp_data.transactions.update({
-            transaction_id: connector_id
-        })
-        await self.send_connector_status(
-            connector_id, ChargePointStatus.charging
-        )
-
-    async def release_transaction_connector(
-        self, transaction_id: int
-    ):
-        connector_id = self.cp_data.transactions[transaction_id]
-        await self.send_connector_status(
-            connector_id, ChargePointStatus.available
-        )
-        del self.cp_data.transactions[transaction_id]
 
     async def send_start_transaction(
         self, transaction: StartTransaction
@@ -230,34 +218,46 @@ class ChargePoint(OcppCp):
     async def on_update_firmware(
         self, location: str, retrieve_date: str, **kwargs
     ) -> call_result.UpdateFirmwarePayload:
-        self.cp_data.state = ChargingPointState.UPDATE_FIRMWARE
+        await self.cp_service.update_entity(data={
+            'state': ChargingPointState.UPDATE_FIRMWARE.value
+        })
+        logger.info(
+            'Starting UpdateFirmware process for CP {}'.format(self.id)
+        )
         return call_result.UpdateFirmwarePayload()
 
     @on(Action.GetDiagnostics)
     async def on_get_diagnostics(
         self, location: str, **kwargs
     ) -> call_result.GetDiagnosticsPayload:
-        self.cp_data.state = ChargingPointState.GET_DIAGNOSTICS
+        await self.cp_service.update_entity(data={
+            'state': ChargingPointState.GET_DIAGNOSTICS.value
+        })
+        logger.info(
+            'Starting GetDiagnostics process for CP {}'.format(self.id)
+        )
         return call_result.GetDiagnosticsPayload(
-            file_name=self.cp_data.identity
+            file_name=self.id
         )
 
 
 async def heartbeat(cp: ChargePoint):
     logger.info(
         "Starting {} CP heartbeat background task".format(
-            cp.cp_data.identity
+            cp.id
         )
     )
     await cp.heartbeat()
 
 
-async def start_cp(cp_data: ChargingPointModel):
-    logger.info("Starting {} CP and background task".format(cp_data.identity))
+async def start_cp(cp_model: ChargingPointModel):
     async with websockets.connect(
-        uri=cp_data.ws_uri,
-        subprotocols=[cp_data.protocol]
+        uri=cp_model.ws_uri,
+        subprotocols=[cp_model.protocol]
     ) as ws:
-        cp = ChargePoint(cp_data=cp_data, connection=ws)
+        cp = ChargePoint(id=cp_model.identity, connection=ws)
+        logger.info(
+            'Starting {} CP and background task'.format(cp.id)
+        )
         cp_db.set_cp(cp)
         await cp.start()

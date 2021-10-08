@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks
 from .schemas import ChargingPointModel
 from .operations import (
     create_charging_point, get_charging_point, delete_charging_point,
+    start_charging_point
 )
 
 router = APIRouter()
@@ -23,7 +24,7 @@ async def get_cp(cp_id: str) -> Dict[str, Any]:
 
     :return: Charging point data.
     """
-    return get_charging_point(cp_id)
+    return await get_charging_point(cp_id)
 
 
 @router.post(
@@ -42,7 +43,7 @@ async def create_cp(
 
     :return: Crated charging point data.
     """
-    return create_charging_point(create_model, background_tasks)
+    return await create_charging_point(create_model, background_tasks)
 
 
 @router.delete(
@@ -58,4 +59,23 @@ async def delete_cp(cp_id: str) -> Dict[str, Any]:
 
     :return: Deleted charging point data.
     """
-    return delete_charging_point(cp_id)
+    return await delete_charging_point(cp_id)
+
+
+@router.post(
+    path='/{cp_id}/start',
+    response_model=ChargingPointModel,
+    summary='Charging point starting',
+    description='Starts charging point with provided id',
+    response_description='Started charging point data',
+)
+async def start_cp(
+    cp_id: str,
+    background_tasks: BackgroundTasks
+) -> Dict[str, Any]:
+    """
+    Creates charging point in system and returns created data.
+
+    :return: Started charging point data.
+    """
+    return await start_charging_point(cp_id, background_tasks)

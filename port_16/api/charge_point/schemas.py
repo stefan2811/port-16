@@ -1,10 +1,15 @@
-from enum import Enum
-from typing import Dict
-
 from pydantic import BaseModel
+from pydantic.main import Enum
 
 WS_HOST = 'ws://localhost:8180'
-WS_MAIN_PATH = '/steve/websocket/CentralSystemService/'
+WS_MAIN_PATH = 'steve/websocket/CentralSystemService'
+
+
+class HeartbeatModel(BaseModel):
+    timeout: int = 5
+    model: str = 'Dummy model'
+    vendor: str = 'Some vendor'
+    serial_number: str = '123456789'
 
 
 class ChargingPointState(Enum):
@@ -17,17 +22,16 @@ class ChargingPointState(Enum):
 
 class ChargingPointModel(BaseModel):
     identity: str
-    heartbeat_timeout: int = 5
-    model: str = 'Dummy model'
-    vendor: str = 'Some vendor'
-    serial_number: str = '123456789'
-    state: ChargingPointState = ChargingPointState.IDLE
     protocol: str = 'ocpp1.6'
+    ws_host: str = WS_HOST
+    ws_path: str = WS_MAIN_PATH
+    heartbeat: HeartbeatModel = HeartbeatModel()
+    state: ChargingPointState = ChargingPointState.IDLE
     connector_number: int = 3
-    connectors: Dict = dict()
-    tags: Dict = dict()
-    transactions: Dict[int, int] = dict()
+
+    class Config:
+        use_enum_values = True
 
     @property
     def ws_uri(self) -> str:
-        return f'{WS_HOST}{WS_MAIN_PATH}{self.identity}'
+        return f'{self.ws_host}/{self.ws_path}/{self.identity}'

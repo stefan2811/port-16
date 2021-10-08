@@ -8,11 +8,16 @@ from port_16.ioc import production
 from port_16.app_status import ApplicationStatusService, AppStatus
 
 logger = logging.getLogger(__name__)
+APPLICATION = 'PORT-16'
+APP_DBS = {
+    'PORT-16': 1,
+    'TRANZIT': 2
+}
 
 
 async def startup_handler():
     redis = await aioredis.create_redis_pool(
-        'redis://localhost'
+        'redis://localhost', db=APP_DBS[APPLICATION]
     )
     inject.configure(partial(production(
         instance_kwargs={

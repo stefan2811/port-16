@@ -2,16 +2,14 @@ import logging
 from typing import Dict, Any
 
 from fastapi import BackgroundTasks
-from fastapi.exceptions import HTTPException
 
-from port_16.api.common import cp_db
-from port_16.api.common.ocpp import start_cp
 from port_16.api.charge_point.schemas import ChargingPointModel
+from port_16.api.common import cp_db, start_cp, ChargePointService
 
 logger = logging.getLogger(__name__)
 
 
-def create_charging_point(
+async def create_charging_point(
     create_model: ChargingPointModel,
     background_tasks: BackgroundTasks
 ) -> Dict[str, Any]:
@@ -24,23 +22,14 @@ def create_charging_point(
         background task which listens websocket.
     :return: Created ChargingPoint data.
     """
-    cp_id = create_model.identity
-    cp = cp_db.get_cp(cp_id)
-    if cp is not None:
-        logger.warning(
-            'Charging point with provided id: '
-            '{} already created in system'.format(cp_id)
-        )
-        raise HTTPException(
-            status_code=409,
-            detail=f'Charging point with id {cp_id} already created in system'
-        )
-
+    cp_db.validate_cp_already_created(create_model.identity)
+    service = ChargePointService(create_model.identity)
+    await service.store_entity(create_model)
     background_tasks.add_task(start_cp, create_model)
     return create_model.dict()
 
 
-def get_charging_point(
+async def get_charging_point(
     cp_id: str,
 ) -> Dict[str, Any]:
     """
@@ -50,31 +39,41 @@ def get_charging_point(
     :param cp_id: Id of ChargingPoint.
     :return: ChargingPoint data.
     """
-    cp = cp_db.get_cp(cp_id)
-    if cp is None:
-        logger.warning(
-            'Charging point not found with provided id: {}'.format(cp_id)
-        )
-        raise HTTPException(
-            status_code=404,
-            detail=f'Charging point with id {cp_id} not found in system'
-        )
-
-    return cp.cp_data.dict()
+    cp = cp_db.validate_and_get(cp_id)
+    cp_model = await cp.cp_service.validate_get_entity()
+    return cp_model.dict()
 
 
-def delete_charging_point(
+async def delete_charging_point(
     cp_id: str,
 ) -> Dict[str, Any]:
-    cp = cp_db.get_cp(cp_id)
-    if cp is None:
-        logger.warning(
-            'Charging point not found with provided id: {}'.format(cp_id)
-        )
-        raise HTTPException(
-            status_code=404,
-            detail=f'Charging point with id {cp_id} not found in system'
-        )
+    """
+    Deletes charging point from system with provided id.
 
+    :param cp_id: Id of ChargingPoint.
+    :return: ChargingPoint data.
+    """
+    cp = cp_db.validate_and_get(cp_id)
     cp_db.remove_cp(cp_id)
-    return cp.cp_data.dict()
+    cp_model = await cp.cp_service.validate_get_entity()
+    await cp.cp_service.delete_entity()
+    return cp_model.dict()
+
+
+async def start_charging_point(
+    cp_id: str,
+    background_tasks: BackgroundTasks
+) -> Dict[str, Any]:
+    """
+    Queries and starts ChargingPoint using provided cp_id and background_tasks
+    tool. Returns ChargingPoint data.
+
+    :param cp_id: Id of ChargingPointModel which will be used for starting.
+    :param background_tasks: FastApi tool which will be used for starting
+        background task which listens websocket.
+    :return: Created ChargingPoint data.
+    """
+    service = ChargePointService(cp_id)
+    cp_model = await service.validate_get_entity()
+    background_tasks.add_task(start_cp, cp_model)
+    return cp_model.dict()

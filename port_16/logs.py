@@ -62,18 +62,21 @@ def configure_logging(application, project_dir, debug):
         '/data/log/{0}'.format(application) if not debug
         else os.path.join(project_dir, 'log')
     )
+    if not os.path.exists(log_dir):
+        os.mkdir(log_dir)
+
     debug_log = os.path.join(log_dir, '{0}.log'.format(application))
 
     if debug:
         LOGGING_CONFIG["root"] = {
             "handlers": ["debug", "console"],
-            "level": "DEBUG",
+            "level": "INFO",
             "propagate": 0
         }
     else:
         LOGGING_CONFIG["root"] = {
             "handlers": ["debug"],
-            "level": "DEBUG",
+            "level": "INFO",
             "propagate": 0
         }
 
