@@ -56,7 +56,7 @@ async def delete_charging_point(
     cp = cp_db.validate_and_get(cp_id)
     cp_db.remove_cp(cp_id)
     cp_model = await cp.cp_service.validate_get_entity()
-    await cp.cp_service.delete_entity()
+    await cp.cp_service.delete_storage_entity()
     return cp_model.dict()
 
 

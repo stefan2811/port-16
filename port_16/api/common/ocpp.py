@@ -25,6 +25,7 @@ from port_16.api.charge_point import (
 logger = logging.getLogger(__name__)
 
 
+# noinspection PyUnusedLocal
 class ChargePoint(OcppCp):
 
     def __init__(self, *args, **kwargs) -> None:
@@ -32,7 +33,7 @@ class ChargePoint(OcppCp):
         self.cp_service = ChargePointService(self.id)
 
     async def send_connector_status(
-        self, connector_id: id,
+        self, connector_id: int,
         status: ChargePointStatus = ChargePointStatus.available,
         error_code: ChargePointErrorCode = ChargePointErrorCode.no_error
     ):
