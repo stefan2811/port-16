@@ -11,7 +11,8 @@ from ocpp.v16 import ChargePoint as OcppCp
 from ocpp.v16.enums import (
     FirmwareStatus, Action, DiagnosticsStatus,
     ChargePointStatus, ChargePointErrorCode, RegistrationStatus,
-    RemoteStartStopStatus
+    RemoteStartStopStatus, AvailabilityStatus, AvailabilityType,
+    ResetType, ResetStatus
 )
 
 from port_16.api.common import cp_db
@@ -253,18 +254,29 @@ class ChargePoint(OcppCp):
     async def after_remote_start_transaction(
             self, connector_id: int, id_tag: str, **kwargs
     ) -> call_result.RemoteStartTransactionPayload:
-        remoteStartTransaction = StartTransaction.construct(connector_id = connector_id,
-                                                            id_tag = id_tag,
-                                                            timestamp=datetime.utcnow().isoformat())
+        timestamp = datetime.utcnow().isoformat()
+        logger.info(
+            'Starting transaction on CP: {} using card with Id: {} '
+            'on connector: {}, start_time: {}'.format(
+                self.id, id_tag, connector_id, timestamp
+            )
+        )
+        remote_start_transaction = StartTransaction.construct(connector_id=connector_id,
+                                                            id_tag=id_tag,
+                                                            timestamp=timestamp)
         cp = cp_db.validate_and_get(self.id, command='Start transaction')
         conn_service = ConnectorService(self.id)
         trans_service = TransactionService(self.id)
-        send_start_transaction = await self.send_start_transaction(remoteStartTransaction)
-        await conn_service.update_connector_status(connector_id)
-        await cp.send_connector_status(
-            connector_id, ChargePointStatus.charging
-        )
-        await trans_service.add_transaction(send_start_transaction.transaction_id, connector_id)
+
+        authorize = await self.send_authorize(id_tag)
+
+        if authorize.get('status') == 'Accepted':
+            send_start_transaction = await self.send_start_transaction(remote_start_transaction)
+            await conn_service.update_connector_status(connector_id)
+            await cp.send_connector_status(
+                connector_id, ChargePointStatus.charging
+            )
+            await trans_service.add_transaction(send_start_transaction.transaction_id, connector_id)
 
     @on(Action.RemoteStopTransaction)
     async def on_remote_stop_transaction(
@@ -278,7 +290,12 @@ class ChargePoint(OcppCp):
     async def after_remote_stop_transaction(
             self, transaction_id: int, **kwargs
     ) -> call_result.RemoteStopTransactionPayload:
-        remoteStopTransaction = StopTransaction.construct(transaction_id = transaction_id)
+        logger.info(
+            'Stop transaction on CP: {} with transaction id: {} '.format(
+                self.id, transaction_id
+            )
+        )
+        remoteStopTransaction = StopTransaction.construct(transaction_id=transaction_id)
         cp = cp_db.validate_and_get(self.id, command='Stop transaction')
 
         trans_service = TransactionService(self.id)
@@ -296,6 +313,67 @@ class ChargePoint(OcppCp):
         await cp.send_connector_status(
             connector_id, ChargePointStatus.available
         )
+
+    @on(Action.ChangeAvailability)
+    async def on_change_availability(
+            self, connector_id: int, type: AvailabilityType
+    ) -> call_result.ChangeAvailabilityPayload:
+        return call_result.ChangeAvailabilityPayload(
+            status=AvailabilityStatus.accepted
+        )
+
+    @after(Action.ChangeAvailability)
+    async def after_change_availability(
+            self, connector_id: int, type: AvailabilityType
+    ) -> call_result.ChangeAvailabilityPayload:
+        logger.info(
+            'Change availability on CP: {} - connector: {} to: {} '.format(
+                self.id, connector_id, type
+            )
+        )
+        cp = cp_db.validate_and_get(self.id, command='Change Availability')
+        conn_service = ConnectorService(self.id)
+        await conn_service.check_connector_exists(connector_id)
+
+        # sets new state for connector on charger
+        if type == AvailabilityType.inoperative:
+            await conn_service.update_connector_status(
+                connector_id, ChargePointStatus.unavailable
+            )
+            # send status notification
+            await cp.send_connector_status(
+                connector_id, ChargePointStatus.unavailable
+            )
+
+        elif type == AvailabilityType.operative:
+            await conn_service.update_connector_status(
+                connector_id, ChargePointStatus.available
+            )
+            # send status notification
+            await cp.send_connector_status(
+                connector_id, ChargePointStatus.available
+            )
+
+    @on(Action.Reset)
+    async def on_reset(
+            self, type: ResetType
+    ) -> call_result.ResetPayload:
+        logger.info(
+            'Reset CP: {} '.format(self.id)
+        )
+        return call_result.ResetPayload(
+            status=ResetStatus.accepted
+        )
+
+    @after(Action.Reset)
+    async def after_reset(
+            self, type: ResetType
+    ) -> call_result.ResetPayload:
+        logger.info(
+            'Boot after reset CP: {} '.format(self.id)
+        )
+        heartbeat_model = HeartbeatModel()
+        await self.send_boot_notification(heartbeat_model)
 
 
 async def heartbeat(cp: ChargePoint):

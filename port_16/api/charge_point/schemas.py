@@ -1,9 +1,10 @@
 from pydantic import BaseModel
 from pydantic.main import Enum
 
-WS_HOST = 'ws://localhost:8180'
-WS_MAIN_PATH = 'steve/websocket/CentralSystemService'
-
+# WS_HOST = 'ws://localhost:8180'
+# WS_MAIN_PATH = 'steve/websocket/CentralSystemService'
+WS_HOST = 'ws://localhost:8020'
+WS_MAIN_PATH = 'websocket/v16'
 
 class HeartbeatModel(BaseModel):
     timeout: int = 5
