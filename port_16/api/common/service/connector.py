@@ -132,3 +132,44 @@ class ConnectorService(StorageService):
             int(key): ChargePointStatus(value)
             for key, value in merged_data.items()
         }
+
+    async def check_connector_exists(
+                self, connector_id: int, key: Optional[str] = None
+        ) -> Dict[int, ChargePointStatus]:
+            """
+            Checks if provided connector id exists using provided key.
+            If key is not provided, will be created from storage_path and
+            identity. If connectors data are not found in redis NotFound
+            exception will be raised.
+
+            :param connector_id: Id of connector within charging point which will
+                be checked.
+            :param key: Key which will be used for getting connectors data.
+            :return: Dict with connector ids and theirs status.
+            """
+            redis_data = await self.get_storage_entity(key)
+            if redis_data is None:
+                logger.warning(
+                    'Charging point not found in redis db '
+                    'with provided key: {}'.format(self.identity)
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f'Charging point with id {self.identity} '
+                        f'not found in system'
+                    )
+                )
+
+            if str(connector_id) not in redis_data.keys():
+                logger.warning(
+                    'Connector id: {} not found within '
+                    'Charging point: {}'.format(connector_id, self.identity)
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f'Connector id {connector_id} not found within Charging '
+                        f'point with id {self.identity}'
+                    )
+                )
