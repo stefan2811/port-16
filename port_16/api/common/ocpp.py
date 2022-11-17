@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from datetime import datetime
 from typing import Dict, Any
 
 import inject
@@ -8,6 +7,8 @@ import websockets
 from ocpp.routing import on
 from ocpp.v16 import call, call_result
 from ocpp.v16 import ChargePoint as OcppCp
+from starlette.websockets import WebSocketDisconnect
+from websockets.exceptions import WebSocketException
 from ocpp.v16.enums import (
     FirmwareStatus, Action, DiagnosticsStatus,
     ChargePointStatus, ChargePointErrorCode, RegistrationStatus
@@ -31,6 +32,12 @@ class ChargePoint(OcppCp):
     def __init__(self, *args, **kwargs) -> None:
         super(ChargePoint, self).__init__(*args, **kwargs)
         self.cp_service = ChargePointService(self.id)
+        self.ws_conn = self._connection
+        self.status = ChargingPointState.IDLE
+
+    async def close_connection(self):
+        self.status = ChargingPointState.CLOSED
+        self.ws_conn.fail_connection()
 
     async def send_connector_status(
         self, connector_id: int,
@@ -149,6 +156,12 @@ class ChargePoint(OcppCp):
 
     async def heartbeat(self) -> None:
         while True:
+            if self.status == ChargingPointState.CLOSED:
+                logger.info(
+                    "Connection for charger with id: {} is closed, "
+                    "returning from heart-beating"
+                )
+                return
             cp_model = await self.cp_service.validate_get_entity()
             cp_state = ChargingPointState(cp_model.state)
             if cp_state == ChargingPointState.ACCEPTED:
@@ -195,7 +208,7 @@ class ChargePoint(OcppCp):
             connector_id=transaction.connector_id,
             id_tag=transaction.id_tag,
             meter_start=transaction.meter_start,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=transaction.start_time,
         )
         #: :type: :class:`ocpp.v16.call_result.StartTransactionPayload`
         return await self.call(request)
@@ -206,7 +219,7 @@ class ChargePoint(OcppCp):
         request = call.StopTransactionPayload(
             transaction_id=transaction.transaction_id,
             meter_stop=transaction.meter_stop,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=transaction.stop_time,
             id_tag=transaction.id_tag,
             reason=transaction.reason,
             # add providing meter values
@@ -261,4 +274,11 @@ async def start_cp(cp_model: ChargingPointModel):
             'Starting {} CP and background task'.format(cp.id)
         )
         cp_db.set_cp(cp)
-        await cp.start()
+        try:
+            await cp.start()
+        except (WebSocketDisconnect, WebSocketException) as e:
+            logger.error(
+                'Charger {} disconnected from server. Reason: {}'.format(
+                    cp_model.identity, str(e)
+                )
+            )

@@ -70,7 +70,7 @@ def configure_logging(application, project_dir, debug):
     if debug:
         LOGGING_CONFIG["root"] = {
             "handlers": ["debug", "console"],
-            "level": "INFO",
+            "level": "DEBUG",
             "propagate": 0
         }
     else:

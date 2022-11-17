@@ -39,7 +39,7 @@ async def get_charging_point(
     :param cp_id: Id of ChargingPoint.
     :return: ChargingPoint data.
     """
-    cp = cp_db.validate_and_get(cp_id)
+    cp = cp_db.validate_and_get(cp_id, command='Get charging point')
     cp_model = await cp.cp_service.validate_get_entity()
     return cp_model.dict()
 
@@ -53,9 +53,10 @@ async def delete_charging_point(
     :param cp_id: Id of ChargingPoint.
     :return: ChargingPoint data.
     """
-    cp = cp_db.validate_and_get(cp_id)
-    cp_db.remove_cp(cp_id)
+    cp = cp_db.validate_and_get(cp_id, command='Delete charging point')
     cp_model = await cp.cp_service.validate_get_entity()
+    await cp.close_connection()
+    cp_db.remove_cp(cp_id)
     await cp.cp_service.delete_storage_entity()
     return cp_model.dict()
 
