@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from typing import Dict, Any
+from ssl import SSLContext, PROTOCOL_TLS, CERT_NONE
 
 import inject
 import websockets
@@ -265,9 +266,22 @@ async def heartbeat(cp: ChargePoint):
 
 
 async def start_cp(cp_model: ChargingPointModel):
+    if cp_model.ws_uri.startswith('wss'):
+        context = SSLContext(protocol=PROTOCOL_TLS)
+        context.check_hostname = False
+        context.verify_mode = CERT_NONE
+        ssl_arg = context
+        # ssl = SSLContext(
+        #     certfile='/Users/stefan/certs/benjo-energy/old/platform.pem',
+        #     keyfile='/Users/stefan/certs/benjo-energy/old/platform.key',
+        #     password=None
+        # )
+    else:
+        ssl_arg = None
     async with websockets.connect(
         uri=cp_model.ws_uri,
-        subprotocols=[cp_model.protocol]
+        subprotocols=[cp_model.protocol],
+        ssl=ssl_arg
     ) as ws:
         cp = ChargePoint(id=cp_model.identity, connection=ws)
         logger.info(
