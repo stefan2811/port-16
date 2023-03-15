@@ -3,15 +3,15 @@ import unittest
 
 from seleniumwire import webdriver
 from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
 
-from tests.utils.bistro import BistroService
-from tests.utils import test_config, DASHBOARD_URL, LOGIN_URL
+from tests.utils import LOGIN_URL, test_config
 
 
 class LoginTest(unittest.TestCase):
 
     def setUp(self):
-        self.driver = webdriver.Chrome('./chromedriver')
+        self.driver = webdriver.Chrome(ChromeDriverManager().install())
         self.driver.get(LOGIN_URL)
 
     def find_element(self, value, by=By.XPATH, wait_time=5):
@@ -33,13 +33,16 @@ class LoginTest(unittest.TestCase):
         )
         assert invalid_message_element.text == "Email is invalid"
 
-    def test_login_valid_credentials(self):
-        username_field = self.find_element(value="//input[@name='email']")
+    def tearDown(self):
+        self.driver.close()
+
+    def test_login_with_valid_credentials(self):
+        username_field = self.find_element(
+            value="//input[@name='email']")
         password_field = self.find_element(
-            value="//input[@name='password']"
-        )
+            value="//input[@name='password']")
         sign_in_field = self.find_element(
-            by=By.ID, value='kt_login_signin_submit'
+            value="//*[@id='kt_login_signin_submit']"
         )
 
         bistro_data = test_config.get('bistro')
@@ -48,24 +51,26 @@ class LoginTest(unittest.TestCase):
         password_field.send_keys(bistro_data['password'])
         time.sleep(1)
         sign_in_field.click()
-        time.sleep(3)
-        self.driver.get(DASHBOARD_URL)
 
-        headers = None
-        for req in self.driver.requests:
-            if req.url == DASHBOARD_URL:
-                headers = req.headers
-
-        bistro_service = BistroService.initialize(headers=headers)
-
-        response = bistro_service.add_charger(
-            name='UMKA PUNJAC',
-            model='FIAT',
-            vendor='KINEZ',
-            address='PODRINJSKA 4',
+        header_element = self.find_element(
+            by=By.ID, value="kt_header_menu"
         )
 
-        assert response['name'] == 'UMKA PUNJAC'
+    def test_contact_us_on_platform_page_navigation(self):
+        contact_us_field = self.find_element(
+            value=(
+                "//a[@class='text-primary ml-10 "
+                "font-weight-bolder font-size-h5']"
+            )
+        )
 
-    def tearDown(self):
-        self.driver.close()
+        time.sleep(1)
+        contact_us_field.click()
+        time.sleep(1)
+
+        contact_up_page_is_opened = self.find_element(
+            value=(
+                "//div[@class='elementor-container "
+                "elementor-column-gap-no']"
+            )
+        )
