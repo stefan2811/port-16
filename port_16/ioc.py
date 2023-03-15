@@ -1,6 +1,7 @@
 """Module for dependency injection configuration"""
 
 import os
+import json
 import logging
 from pathlib import Path
 from typing import Dict, Callable
@@ -10,7 +11,17 @@ from inject import Binder
 from port_16.logs import configure_logging
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+CONFIG_DIR = os.path.abspath(os.path.join(BASE_DIR, 'config'))
 APP_NAME = 'port-16'
+
+
+class SecureDict(dict):
+
+    def __str__(self):
+        return '*****'
+
+    def __repr__(self):
+        return '*****'
 
 
 def production(
@@ -38,3 +49,14 @@ def production(
         logger.info(f'Starting app {APP_NAME}..')
 
     return bind_configuration
+
+
+def get_config():
+    """
+    Gets app configuration from config file.
+
+    :return: dict whit configuration.
+    :rtype: dict
+    """
+    file_path = os.path.join(CONFIG_DIR, f'{APP_NAME}.json')
+    return SecureDict(json.load(open(file_path, 'rt')))
